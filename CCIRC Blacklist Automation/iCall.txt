@@ -1,0 +1,33 @@
+	set hsl [HSL::open -proto UDP -pool syslog_pool]
+	tmsh::log "---STARTING UPDATE OPERATION---"
+	switch [exec python /var/tmp/category_update/update.py download] {
+		"NOUPDATE" { tmsh::log "NO UPDATES FOUND IN LATEST DOWNLOAD" }
+		"DLERROR" { tmsh::log "CATEGORY UPDATE FAILED DUE TO FAILED DOWNLOAD" }
+		default {
+			tmsh::log "UPDATING CUSTOM CATEGORY"
+			set i 0
+			# Replace existing custom category list with current active entries (enabled & within max-age OR permanent)
+			foreach x [exec python /var/tmp/category_update/update.py update] {
+				if { [lindex [split ${x} ","] 1] eq "y" } { set type "glob-match" } else { set type "exact-match" }
+				if { ($i == 0) } {
+					set url_list "[string map { * \\* ? \\?} [lindex [split ${x} ","] 0]] \{ type ${type} \}"
+				} else {
+					set url_list "$url_list [string map { * \\* ? \\?} [lindex [split ${x} ","] 0]] \{ type ${type} \}"
+				}
+				incr i
+			}
+			if { [catch {tmsh::modify /sys url-db url-category Global-Block \{ urls replace-all-with \{ $url_list \} \} } errmsg ] } { 
+				tmsh::log "CATEGORY UPDATE FAILED DUE TO ONE OR MORE ERRORS"
+				tmsh::log "ERROR ENCOUNTERED: $errmsg"
+				unset url_list errmsg
+				exec rm -f /var/tmp/category_update/downloaded_list.tmp
+			} else {
+				tmsh::log "CATEGORY UPDATE COMPLETED ($i URLS IN BLACKLIST)"
+				#Save config
+				tmsh::save /sys config partitions all
+				exec mv /var/tmp/category_update/downloaded_list.tmp /var/tmp/category_update/current_list.txt
+				unset url_list
+			}
+		}
+	}
+	tmsh::log "---FINISHED UPDATE OPERATION---"
